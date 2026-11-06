@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+DerivedData/
+# 由 project.yml + XcodeGen 生成，不入库
+BrandMeister.xcodeproj/
+*.xcworkspace/
+.DS_Store
