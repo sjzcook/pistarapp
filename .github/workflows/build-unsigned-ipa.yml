@@ -1,0 +1,126 @@
+name: Build unsigned iOS IPA (Xcode 27)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "**.xcodeproj/**"
+      - "**.xcworkspace/**"
+      - "**.swift"
+      - "**.plist"
+      - ".github/workflows/build-unsigned-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Archive and package unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode_27*.app' -print -quit)"
+          if [[ -z "$XCODE_APP" ]]; then
+            echo "::error::Xcode 27 is not installed on this runner image."
+            echo "Installed Xcode applications:"
+            ls -1d /Applications/Xcode*.app 2>/dev/null || true
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          xcodebuild -version | grep -q '^Xcode 27\.'
+
+      - name: Resolve project and scheme
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find . -maxdepth 4 -name '*.xcworkspace' -not -path '*/Pods/*' -print | head -n 1)"
+          PROJECT="$(find . -maxdepth 4 -name '*.xcodeproj' -not -path '*/Pods/*' -print | head -n 1)"
+
+          if [[ -n "$WORKSPACE" ]]; then
+            CONTAINER_ARGS=(-workspace "$WORKSPACE")
+            echo "container_args=-workspace $WORKSPACE" >> "$GITHUB_OUTPUT"
+            LIST_JSON="$(xcodebuild -list -json -workspace "$WORKSPACE")"
+          elif [[ -n "$PROJECT" ]]; then
+            CONTAINER_ARGS=(-project "$PROJECT")
+            echo "container_args=-project $PROJECT" >> "$GITHUB_OUTPUT"
+            LIST_JSON="$(xcodebuild -list -json -project "$PROJECT")"
+          else
+            echo "::error::No .xcworkspace or .xcodeproj was found in the repository."
+            exit 1
+          fi
+
+          SCHEME="$(printf '%s' "$LIST_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); k="workspace" if "workspace" in d else "project"; schemes=d[k].get("schemes", []); print(schemes[0] if schemes else "")')"
+          if [[ -z "$SCHEME" ]]; then
+            echo "::error::No shared build scheme was found. Share a scheme in Xcode and commit it under xcshareddata/xcschemes."
+            exit 1
+          fi
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Using scheme: $SCHEME"
+
+      - name: Build unsigned app archive
+        shell: bash
+        env:
+          SCHEME: ${{ steps.project.outputs.scheme }}
+          CONTAINER_ARGS: ${{ steps.project.outputs.container_args }}
+        run: |
+          set -euo pipefail
+          # Convert the safely generated container arguments back into an array.
+          read -r -a CONTAINER <<< "$CONTAINER_ARGS"
+          xcodebuild "${CONTAINER[@]}" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/PiStarApp.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "$PWD/build-xcodebuild.log" \
+            | xcbeautify 2>/dev/null || {
+              status=${PIPESTATUS[0]}
+              if [[ "$status" -ne 0 ]]; then exit "$status"; fi
+            }
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/PiStarApp.xcarchive/Products/Applications -maxdepth 1 -name '*.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::error::The archive contains no .app. Check the selected scheme and iOS target."
+            exit 1
+          fi
+
+          IPA_DIR="$PWD/build/ipa"
+          mkdir -p "$IPA_DIR/Payload"
+          cp -R "$APP_PATH" "$IPA_DIR/Payload/"
+          (cd "$IPA_DIR" && /usr/bin/zip -qry "$PWD/../PiStarApp-unsigned.ipa" Payload)
+          test -s build/PiStarApp-unsigned.ipa
+          unzip -l build/PiStarApp-unsigned.ipa
+
+      - name: Upload unsigned IPA and archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiStarApp-unsigned-ipa
+          path: |
+            build/PiStarApp-unsigned.ipa
+            build/PiStarApp.xcarchive
+            build-xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14
