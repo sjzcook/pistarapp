@@ -41,8 +41,12 @@ jobs:
             exit 1
           fi
           sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
-          xcodebuild -version
-          xcodebuild -version | grep -q '^Xcode 27\.'
+          XCODE_VERSION="$(xcodebuild -version)"
+          printf '%s\n' "$XCODE_VERSION"
+          if ! grep -q '^Xcode 27\.' <<< "$XCODE_VERSION"; then
+            echo "::error::Expected Xcode 27, but found a different version."
+            exit 1
+          fi
 
       - name: Resolve project and shared scheme
         id: project
