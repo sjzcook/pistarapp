@@ -6,10 +6,11 @@ on:
     branches:
       - main
     paths:
-      - "**.xcodeproj/**"
-      - "**.xcworkspace/**"
-      - "**.swift"
-      - "**.plist"
+      - "Sources/**"
+      - "Config/**"
+      - "project.yml"
+      - "Package.swift"
+      - "Scripts/**"
       - ".github/workflows/build-unsigned-ipa.yml"
 
 permissions:
@@ -36,7 +37,6 @@ jobs:
           XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode_27*.app' -print -quit)"
           if [[ -z "$XCODE_APP" ]]; then
             echo "::error::Xcode 27 is not installed on this runner image."
-            echo "Installed Xcode applications:"
             ls -1d /Applications/Xcode*.app 2>/dev/null || true
             exit 1
           fi
@@ -48,53 +48,30 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve project and shared scheme
-        id: project
+      - name: Install XcodeGen
         shell: bash
         run: |
           set -euo pipefail
-          WORKSPACE="$(find . -maxdepth 5 -name '*.xcworkspace' -not -path '*/Pods/*' -print | head -n 1)"
-          PROJECT="$(find . -maxdepth 5 -name '*.xcodeproj' -not -path '*/Pods/*' -print | head -n 1)"
-
-          if [[ -n "$WORKSPACE" ]]; then
-            echo "container_type=workspace" >> "$GITHUB_OUTPUT"
-            echo "container_path=$WORKSPACE" >> "$GITHUB_OUTPUT"
-            LIST_JSON="$(xcodebuild -list -json -workspace "$WORKSPACE")"
-          elif [[ -n "$PROJECT" ]]; then
-            echo "container_type=project" >> "$GITHUB_OUTPUT"
-            echo "container_path=$PROJECT" >> "$GITHUB_OUTPUT"
-            LIST_JSON="$(xcodebuild -list -json -project "$PROJECT")"
-          else
-            echo "::error::No .xcworkspace or .xcodeproj was found in the repository."
-            exit 1
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
           fi
+          xcodegen --version
 
-          SCHEME="$(printf '%s' "$LIST_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); k="workspace" if "workspace" in d else "project"; schemes=d[k].get("schemes", []); print(schemes[0] if schemes else "")')"
-          if [[ -z "$SCHEME" ]]; then
-            echo "::error::No shared build scheme was found. Share a scheme in Xcode and commit it under xcshareddata/xcschemes."
-            exit 1
-          fi
-          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
-          echo "Using scheme: $SCHEME"
-
-      - name: Build unsigned app archive
+      - name: Generate native iOS project
         shell: bash
-        env:
-          SCHEME: ${{ steps.project.outputs.scheme }}
-          CONTAINER_TYPE: ${{ steps.project.outputs.container_type }}
-          CONTAINER_PATH: ${{ steps.project.outputs.container_path }}
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec project.yml
+          test -d BrandMeister.xcodeproj
+          xcodebuild -list -project BrandMeister.xcodeproj
+
+      - name: Build unsigned iOS archive
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p build
-          if [[ "$CONTAINER_TYPE" == "workspace" ]]; then
-            CONTAINER_ARGS=(-workspace "$CONTAINER_PATH")
-          else
-            CONTAINER_ARGS=(-project "$CONTAINER_PATH")
-          fi
-
-          set -o pipefail
-          xcodebuild "${CONTAINER_ARGS[@]}" \
-            -scheme "$SCHEME" \
+          xcodebuild -project BrandMeister.xcodeproj \
+            -scheme BrandMeister \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/PiStarApp.xcarchive" \
@@ -110,10 +87,9 @@ jobs:
           set -euo pipefail
           APP_PATH="$(find build/PiStarApp.xcarchive/Products/Applications -maxdepth 1 -name '*.app' -print -quit)"
           if [[ -z "$APP_PATH" ]]; then
-            echo "::error::The archive contains no .app. Check the selected scheme and iOS target."
+            echo "::error::The archive contains no iOS .app. Check the archive log."
             exit 1
           fi
-
           IPA_DIR="$PWD/build/ipa"
           mkdir -p "$IPA_DIR/Payload"
           cp -R "$APP_PATH" "$IPA_DIR/Payload/"
@@ -121,13 +97,12 @@ jobs:
           test -s build/PiStarApp-unsigned.ipa
           unzip -l build/PiStarApp-unsigned.ipa
 
-      - name: Upload unsigned IPA and archive
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: PiStarApp-unsigned-ipa
           path: |
             build/PiStarApp-unsigned.ipa
-            build/PiStarApp.xcarchive
             build-xcodebuild.log
           if-no-files-found: error
           retention-days: 14
