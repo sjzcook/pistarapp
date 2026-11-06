@@ -44,21 +44,21 @@ jobs:
           xcodebuild -version
           xcodebuild -version | grep -q '^Xcode 27\.'
 
-      - name: Resolve project and scheme
+      - name: Resolve project and shared scheme
         id: project
         shell: bash
         run: |
           set -euo pipefail
-          WORKSPACE="$(find . -maxdepth 4 -name '*.xcworkspace' -not -path '*/Pods/*' -print | head -n 1)"
-          PROJECT="$(find . -maxdepth 4 -name '*.xcodeproj' -not -path '*/Pods/*' -print | head -n 1)"
+          WORKSPACE="$(find . -maxdepth 5 -name '*.xcworkspace' -not -path '*/Pods/*' -print | head -n 1)"
+          PROJECT="$(find . -maxdepth 5 -name '*.xcodeproj' -not -path '*/Pods/*' -print | head -n 1)"
 
           if [[ -n "$WORKSPACE" ]]; then
-            CONTAINER_ARGS=(-workspace "$WORKSPACE")
-            echo "container_args=-workspace $WORKSPACE" >> "$GITHUB_OUTPUT"
+            echo "container_type=workspace" >> "$GITHUB_OUTPUT"
+            echo "container_path=$WORKSPACE" >> "$GITHUB_OUTPUT"
             LIST_JSON="$(xcodebuild -list -json -workspace "$WORKSPACE")"
           elif [[ -n "$PROJECT" ]]; then
-            CONTAINER_ARGS=(-project "$PROJECT")
-            echo "container_args=-project $PROJECT" >> "$GITHUB_OUTPUT"
+            echo "container_type=project" >> "$GITHUB_OUTPUT"
+            echo "container_path=$PROJECT" >> "$GITHUB_OUTPUT"
             LIST_JSON="$(xcodebuild -list -json -project "$PROJECT")"
           else
             echo "::error::No .xcworkspace or .xcodeproj was found in the repository."
@@ -77,12 +77,19 @@ jobs:
         shell: bash
         env:
           SCHEME: ${{ steps.project.outputs.scheme }}
-          CONTAINER_ARGS: ${{ steps.project.outputs.container_args }}
+          CONTAINER_TYPE: ${{ steps.project.outputs.container_type }}
+          CONTAINER_PATH: ${{ steps.project.outputs.container_path }}
         run: |
           set -euo pipefail
-          # Convert the safely generated container arguments back into an array.
-          read -r -a CONTAINER <<< "$CONTAINER_ARGS"
-          xcodebuild "${CONTAINER[@]}" \
+          mkdir -p build
+          if [[ "$CONTAINER_TYPE" == "workspace" ]]; then
+            CONTAINER_ARGS=(-workspace "$CONTAINER_PATH")
+          else
+            CONTAINER_ARGS=(-project "$CONTAINER_PATH")
+          fi
+
+          set -o pipefail
+          xcodebuild "${CONTAINER_ARGS[@]}" \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
@@ -91,11 +98,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            | tee "$PWD/build-xcodebuild.log" \
-            | xcbeautify 2>/dev/null || {
-              status=${PIPESTATUS[0]}
-              if [[ "$status" -ne 0 ]]; then exit "$status"; fi
-            }
+            2>&1 | tee "$PWD/build-xcodebuild.log"
 
       - name: Package unsigned IPA
         shell: bash
