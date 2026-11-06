@@ -1,66 +1,58 @@
-# XcodeGen 工程描述 —— 生成原生 .xcodeproj（Xcode 27）
-#
-#   bash Scripts/generate-xcodeproj.sh
-#
-# 如果只想快速跑起来，直接用 Xcode 27 打开 Package.swift 即可，不需要本文件。
 name: BrandMeister
 
 options:
   bundleIdPrefix: com.pistar
   createIntermediateGroups: true
   deploymentTarget:
+    iOS: "17.0"
     macOS: "15.0"
   xcodeVersion: "27.0"
 
 settings:
   base:
-    # 语言模式固定为 v5：网络层是串行队列 + 回调模型，不是 actor 模型。
-    # 迁移到 Swift 6 严格并发后改成 "6.0" 即可。
     SWIFT_VERSION: "5.0"
-    SWIFT_STRICT_CONCURRENCY: "minimal"
-    # Xcode 26 起新建 App 默认把整个 target 推断为 MainActor，
-    # 会把网络收发错误地绑到主线程，这里显式关掉。
-    SWIFT_DEFAULT_ACTOR_ISOLATION: "nonisolated"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
     SWIFT_APPROACHABLE_CONCURRENCY: "NO"
-    MACOSX_DEPLOYMENT_TARGET: "15.0"
-    CODE_SIGN_STYLE: "Automatic"
-    ENABLE_HARDENED_RUNTIME: "YES"
     CLANG_ENABLE_MODULES: "YES"
     DEAD_CODE_STRIPPING: "YES"
     SWIFT_EMIT_LOC_STRINGS: "NO"
 
 targets:
-  # 协议库：编译成静态库，App 与 CLI 直接链进去，省掉 embed / rpath 这一层
-  # （对应 Pi-Star 侧 libMMDVM + libDMRGateway 的角色）。
   BrandMeisterKit:
     type: library.static
-    platform: macOS
+    platform: iOS
     sources:
       - path: Sources/BrandMeisterKit
     settings:
       base:
-        PRODUCT_NAME: "BrandMeisterKit"
+        PRODUCT_NAME: BrandMeisterKit
         DEFINES_MODULE: "YES"
         SKIP_INSTALL: "YES"
 
   BrandMeister:
     type: application
-    platform: macOS
+    platform: iOS
     sources:
       - path: Sources/BrandMeisterApp
     dependencies:
       - target: BrandMeisterKit
     settings:
       base:
-        PRODUCT_NAME: "BrandMeister"
-        PRODUCT_BUNDLE_IDENTIFIER: "com.pistar.BrandMeister"
+        PRODUCT_NAME: BrandMeister
+        PRODUCT_BUNDLE_IDENTIFIER: com.pistar.BrandMeister
+        PRODUCT_NAME: Pi-Star
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: "YES"
-        INFOPLIST_KEY_CFBundleDisplayName: "Pi-Star BrandMeister"
-        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
-        CODE_SIGN_ENTITLEMENTS: "Config/BrandMeister.entitlements"
-        ENABLE_PREVIEWS: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: Pi-Star
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleDefault
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: "NO"
 
   bmwatch:
     type: tool
@@ -71,7 +63,7 @@ targets:
       - target: BrandMeisterKit
     settings:
       base:
-        PRODUCT_NAME: "bmwatch"
+        PRODUCT_NAME: bmwatch
         GENERATE_INFOPLIST_FILE: "YES"
 
 schemes:
